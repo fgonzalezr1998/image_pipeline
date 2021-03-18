@@ -57,7 +57,50 @@ bool service(std_srvs::Empty::Request &req, std_srvs::Empty::Response &res) {
  */
 class Callbacks {
 public:
-  Callbacks() : is_first_image_(true), has_camera_info_(false), count_(0) {
+  Callbacks() : is_first_image_(true), has_camera_info_(false), count_(0),
+  save_img_(false)
+  {
+
+  }
+
+  void saveImage() {
+    if (!save_img_)
+      return;
+
+    save_img_ = false;
+    cv::Mat image;
+    std::string filename;
+    try
+    {
+      image = cv_bridge::toCvShare(image_to_save_, encoding)->image;
+    } catch(cv_bridge::Exception)
+    {
+      ROS_ERROR("Unable to convert %s image to %s", image_to_save_->encoding.c_str(), encoding.c_str());
+      return;
+    }
+
+    if (!image.empty()) {
+      try {
+        filename = (g_format).str();
+      } catch (...) { g_format.clear(); }
+      try {
+        filename = (g_format % count_).str();
+      } catch (...) { g_format.clear(); }
+      try { 
+        filename = (g_format % count_ % "jpg").str();
+      } catch (...) { g_format.clear(); }
+
+      if ( save_all_image || save_image_service ) {
+        cv::imwrite(filename, image);
+        ROS_INFO("Saved image %s", filename.c_str());
+
+        save_image_service = false;
+      } else {
+        return;
+      }
+    } else {
+      ROS_WARN("Couldn't save image, no data!");
+    }
   }
 
   bool callbackStartSave(std_srvs::Trigger::Request &req,
@@ -107,9 +150,8 @@ public:
     }
 
     // save the image
-    std::string filename;
-    if (!saveImage(image_msg, filename))
-      return;
+    save_img_ = true;
+    image_to_save_ = image_msg;
 
     count_++;
   }
@@ -128,62 +170,27 @@ public:
     }
 
     // save the image
-    std::string filename;
-    if (!saveImage(image_msg, filename))
-      return;
-
+    save_img_ = true;
+    image_to_save_ = image_msg;
+    //std::string filename;
+    //saveImage(image_msg, filename)
+    /*
     // save the CameraInfo
     if (info) {
       filename = filename.replace(filename.rfind("."), filename.length(), ".ini");
       camera_calibration_parsers::writeCalibration(filename, "camera", *info);
     }
-
+    */
     count_++;
   }
-private:
-  bool saveImage(const sensor_msgs::ImageConstPtr& image_msg, std::string &filename) {
-    cv::Mat image;
-    try
-    {
-      image = cv_bridge::toCvShare(image_msg, encoding)->image;
-    } catch(cv_bridge::Exception)
-    {
-      ROS_ERROR("Unable to convert %s image to %s", image_msg->encoding.c_str(), encoding.c_str());
-      return false;
-    }
-
-    if (!image.empty()) {
-      try {
-        filename = (g_format).str();
-      } catch (...) { g_format.clear(); }
-      try {
-        filename = (g_format % count_).str();
-      } catch (...) { g_format.clear(); }
-      try { 
-        filename = (g_format % count_ % "jpg").str();
-      } catch (...) { g_format.clear(); }
-
-      if ( save_all_image || save_image_service ) {
-        cv::imwrite(filename, image);
-        ROS_INFO("Saved image %s", filename.c_str());
-
-        save_image_service = false;
-      } else {
-        return false;
-      }
-    } else {
-      ROS_WARN("Couldn't save image, no data!");
-      return false;
-    }
-    return true;
-  }
-
 private:
   bool is_first_image_;
   bool has_camera_info_;
   size_t count_;
   ros::Time start_time_;
   ros::Time end_time_;
+  bool save_img_;
+  sensor_msgs::Image::ConstPtr image_to_save_;
 };
 
 int main(int argc, char** argv)
@@ -192,6 +199,7 @@ int main(int argc, char** argv)
   ros::NodeHandle nh;
   image_transport::ImageTransport it(nh);
   std::string topic = nh.resolveName("image");
+  int freq = 2; // Hz
 
   Callbacks callbacks;
   // Useful when CameraInfo is being published
@@ -222,5 +230,12 @@ int main(int argc, char** argv)
       "end", &Callbacks::callbackEndSave, &callbacks);
   // }
 
-  ros::spin();
+  ros::Rate loop_rate(freq);
+  while (ros::ok()) {
+    ros::spinOnce();
+    callbacks.saveImage();
+    loop_rate.sleep();
+  }
+
+  // ros::spin();
 }
